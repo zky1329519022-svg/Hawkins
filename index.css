@@ -1,0 +1,317 @@
+/* THE GATE - 样式设计 */
+
+:root {
+    --bg-color: #050203;
+    --neon-red: #e50914;
+    --neon-red-glow: rgba(229, 9, 20, 0.8);
+    --neon-red-dim: rgba(229, 9, 20, 0.2);
+    --panel-bg: rgba(10, 5, 6, 0.75);
+    --panel-border: rgba(229, 9, 20, 0.4);
+    --text-color: #f5f5f7;
+    --font-title: 'Oswald', sans-serif;
+    --font-mono: 'Courier Prime', monospace;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    font-family: var(--font-mono);
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+}
+
+/* 经典模拟噪点叠加层 */
+#noise-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-image: radial-gradient(rgba(0, 0, 0, 0) 60%, rgba(0, 0, 0, 0.9)),
+                      url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+    opacity: 0.08;
+    z-index: 10;
+    pointer-events: none;
+    animation: grain 0.5s steps(10) infinite;
+}
+
+@keyframes grain {
+    0%, 100% { transform:translate(0, 0); }
+    10% { transform:translate(-1%, -1%); }
+    20% { transform:translate(-2%, 1%); }
+    30% { transform:translate(1%, -2%); }
+    40% { transform:translate(-1%, 3%); }
+    50% { transform:translate(-2%, 1%); }
+    60% { transform:translate(1%, 2%); }
+    70% { transform:translate(3%, -2%); }
+    80% { transform:translate(-2%, 1%); }
+    90% { transform:translate(1%, -3%); }
+}
+
+/* 霓虹标题区域 */
+.neon-header {
+    position: absolute;
+    top: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 5;
+    text-align: center;
+    pointer-events: none;
+    width: 90%;
+    max-width: 600px;
+}
+
+.main-title {
+    font-family: var(--font-title);
+    font-size: 3.5rem;
+    font-weight: 700;
+    letter-spacing: 12px;
+    color: #000;
+    text-shadow: 
+        -1px -1px 0 var(--neon-red),  
+         1px -1px 0 var(--neon-red),
+        -1px  1px 0 var(--neon-red),
+         1px  1px 0 var(--neon-red),
+         0 0 10px var(--neon-red-glow),
+         0 0 25px rgba(229, 9, 20, 0.6);
+    text-transform: uppercase;
+    animation: flicker-light 3s infinite alternate;
+}
+
+.subtitle {
+    font-size: 0.9rem;
+    color: #a0a0a5;
+    letter-spacing: 4px;
+    margin-top: 5px;
+    text-transform: uppercase;
+    text-shadow: 0 0 5px rgba(0, 0, 0, 0.8);
+}
+
+/* WebGL 容器 */
+#canvas-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+
+/* 交互提示 */
+.interactive-hint {
+    position: absolute;
+    bottom: 125px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 5;
+    pointer-events: none;
+    text-align: center;
+    color: #808085;
+    font-size: 0.85rem;
+    letter-spacing: 2px;
+    animation: breathe 3s infinite ease-in-out;
+}
+
+@keyframes breathe {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 0.8; color: #b08085; }
+}
+
+/* 控制面板 */
+.control-panel {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 6;
+    display: flex;
+    gap: 15px;
+    padding: 12px 25px;
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8),
+                inset 0 0 15px rgba(229, 9, 20, 0.15);
+}
+
+/* 霓虹按钮 */
+.neon-btn {
+    font-family: var(--font-mono);
+    background: transparent;
+    color: #dfa9ac;
+    border: 1px solid rgba(229, 9, 20, 0.5);
+    padding: 10px 20px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.3s ease;
+    outline: none;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.neon-btn::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.15), transparent);
+    transition: 0.5s;
+}
+
+.neon-btn:hover::before {
+    left: 100%;
+}
+
+.neon-btn:hover {
+    color: #ffffff;
+    background: rgba(229, 9, 20, 0.2);
+    border-color: var(--neon-red);
+    box-shadow: 0 0 12px var(--neon-red-glow),
+                inset 0 0 4px var(--neon-red-glow);
+    text-shadow: 0 0 5px #fff;
+}
+
+.neon-btn:active {
+    transform: scale(0.95);
+    background: rgba(229, 9, 20, 0.35);
+}
+
+/* 霓虹闪烁动画 */
+@keyframes flicker-light {
+    0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% {
+        text-shadow: 
+            -1px -1px 0 var(--neon-red),  
+             1px -1px 0 var(--neon-red),
+            -1px  1px 0 var(--neon-red),
+             1px  1px 0 var(--neon-red),
+             0 0 10px var(--neon-red-glow),
+             0 0 25px rgba(229, 9, 20, 0.6);
+        opacity: 1;
+    }
+    20%, 24%, 55% {
+        text-shadow: none;
+        opacity: 0.7;
+    }
+}
+
+/* Loading 遮罩层 */
+#loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    z-index: 100;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: opacity 1s ease, transform 1s ease;
+}
+
+#loading-overlay.fade-out {
+    opacity: 0;
+    pointer-events: none;
+    transform: scale(1.05);
+}
+
+.loading-content {
+    text-align: center;
+    width: 80%;
+    max-width: 400px;
+}
+
+.loading-logo {
+    font-family: var(--font-title);
+    font-size: 4rem;
+    font-weight: 700;
+    letter-spacing: 15px;
+    color: var(--neon-red);
+    text-shadow: 0 0 15px var(--neon-red-glow);
+    margin-bottom: 40px;
+    animation: pulse-glow 2s infinite ease-in-out;
+}
+
+.loading-bar-container {
+    width: 100%;
+    height: 3px;
+    background: #111;
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 20px;
+    box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+}
+
+#loading-bar {
+    width: 0%;
+    height: 100%;
+    background: var(--neon-red);
+    box-shadow: 0 0 10px var(--neon-red-glow);
+    transition: width 0.3s ease;
+}
+
+.loading-text {
+    font-size: 0.8rem;
+    color: #606065;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}
+
+@keyframes pulse-glow {
+    0%, 100% {
+        transform: scale(1);
+        text-shadow: 0 0 15px var(--neon-red-glow);
+    }
+    50% {
+        transform: scale(1.02);
+        text-shadow: 0 0 30px var(--neon-red-glow), 0 0 10px var(--neon-red);
+    }
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+    .main-title {
+        font-size: 2.2rem;
+        letter-spacing: 5px;
+    }
+    .loading-logo {
+        font-size: 2.5rem;
+        letter-spacing: 6px;
+    }
+    .control-panel {
+        bottom: 20px;
+        padding: 8px 15px;
+        gap: 8px;
+        width: 95%;
+        justify-content: center;
+    }
+    .neon-btn {
+        padding: 8px 12px;
+        font-size: 0.75rem;
+        letter-spacing: 1px;
+    }
+    .interactive-hint {
+        bottom: 105px;
+        font-size: 0.75rem;
+    }
+}

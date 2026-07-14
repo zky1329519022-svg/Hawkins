@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>THE GATE - 怪奇物语维度裂隙</title>
+    <meta name="description" content="一个基于怪奇物语主题的单页 Web 互动 demo。拉扯现实层，撕开通往颠倒世界的虚空缝隙。支持自定义 6 层图层。">
+    <link rel="stylesheet" href="index.css">
+    
+    <!-- 引入复古感的 Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400;1,700&family=Oswald:wght@400;700&display=swap" rel="stylesheet">
+    
+    <!-- Importmap 映射，使用不带打包的 ESM 导入 Three.js -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+</head>
+<body>
+    <!-- 经典的红黑颗粒噪点背景 -->
+    <div id="noise-overlay"></div>
+
+    <!-- 顶部标题区，经典的怪奇物语双红霓虹框线 -->
+    <header class="neon-header">
+        <h1 class="main-title">THE GATE</h1>
+        <p class="subtitle">拉扯现实，唤醒深渊</p>
+    </header>
+
+    <!-- WebGL 渲染容器 -->
+    <main id="canvas-container"></main>
+
+    <!-- UI 控制面板 -->
+    <section class="control-panel" aria-label="交互控制面板">
+        <button id="btn-audio" class="neon-btn glow-red" aria-label="开启或关闭音效">
+            <span class="icon">🔇</span> 音效: 关
+        </button>
+        <button id="btn-upload" class="neon-btn glow-red" aria-label="上传自定义图片">
+            <span class="icon">📷</span> 上传图片 (最多6张)
+        </button>
+        <button id="btn-reset" class="neon-btn glow-red" aria-label="重置场景">
+            重置
+        </button>
+        
+        <!-- 隐藏的图片多选输入框 -->
+        <input type="file" id="input-upload" multiple accept="image/*" style="display:none">
+    </section>
+
+    <!-- 交互提示 -->
+    <div class="interactive-hint">
+        <p>按住并拖拽画面撕开现实，进入颠倒世界 (共 6 层空间)</p>
+    </div>
+
+    <!-- Loading 遮罩层 -->
+    <div id="loading-overlay">
+        <div class="loading-content">
+            <div class="loading-logo">THE GATE</div>
+            <div class="loading-bar-container">
+                <div id="loading-bar"></div>
+            </div>
+            <div class="loading-text">正在打破现实屏障... <span id="loading-percent">0%</span></div>
+        </div>
+    </div>
+
+    <!-- 引入核心逻辑模块 -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>
