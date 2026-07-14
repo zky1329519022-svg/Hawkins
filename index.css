@@ -196,6 +196,62 @@ body {
     background: rgba(229, 9, 20, 0.35);
 }
 
+/* 手势激活状态 */
+.neon-btn.active {
+    color: #ffffff;
+    background: rgba(229, 9, 20, 0.4);
+    border-color: #ff3333;
+    box-shadow: 0 0 15px var(--neon-red-glow), inset 0 0 8px #ff3333;
+    text-shadow: 0 0 8px #fff;
+    animation: pulse-button 1.5s infinite alternate;
+}
+
+@keyframes pulse-button {
+    0% { box-shadow: 0 0 8px var(--neon-red-glow), inset 0 0 4px #ff3333; }
+    100% { box-shadow: 0 0 18px var(--neon-red-glow), inset 0 0 10px #ff3333; }
+}
+
+/* 摄像头视频渲染小窗 */
+#webcam-container {
+    position: absolute;
+    bottom: 120px;
+    right: 30px;
+    width: 160px;
+    height: 138px;
+    z-index: 10;
+    background: rgba(5, 2, 3, 0.85);
+    border: 1px solid var(--neon-red);
+    border-radius: 4px;
+    padding: 3px;
+    box-shadow: 0 0 15px var(--neon-red-glow);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#webcam {
+    display: none; /* 隐藏原生摄像头，只用 canvas 画镜像和手骨 */
+}
+
+#webcam-canvas {
+    width: 154px;
+    height: 114px;
+    border-radius: 2px;
+    background: #000;
+}
+
+.webcam-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--neon-red);
+    letter-spacing: 2px;
+    text-align: center;
+    margin-top: 4px;
+    text-shadow: 0 0 3px var(--neon-red-glow);
+    animation: flicker-light 4s infinite alternate;
+}
+
 /* 霓虹闪烁动画 */
 @keyframes flicker-light {
     0%, 19%, 21%, 23%, 25%, 54%, 56%, 100% {
@@ -304,6 +360,7 @@ body {
         gap: 8px;
         width: 95%;
         justify-content: center;
+        flex-wrap: wrap;
     }
     .neon-btn {
         padding: 8px 12px;
@@ -311,7 +368,12 @@ body {
         letter-spacing: 1px;
     }
     .interactive-hint {
-        bottom: 105px;
+        bottom: 155px;
         font-size: 0.75rem;
+    }
+    #webcam-container {
+        bottom: 215px;
+        right: 50%;
+        transform: translateX(50%);
     }
 }

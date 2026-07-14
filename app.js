@@ -3,15 +3,15 @@ import * as THREE from 'three';
 // --- 全局配置与状态 ---
 const CONFIG = {
     // 物理参数
-    gridWidth: 20,       // 物理网格横向节点数（降低一些以支持 5 层并发）
+    gridWidth: 20,       // 物理网格横向节点数
     gridHeight: 15,      // 物理网格纵向节点数
     clothWidth: 16,      // 物理网格 3D 世界宽度
     clothHeight: 12,     // 物理网格 3D 世界高度
-    physicsIterations: 6, // 约束求解器迭代次数（在 5 层下保证 60fps 性能）
+    physicsIterations: 6, // 约束求解器迭代次数
     gravity: -0.04,       // 微弱重力
     damping: 0.93,        // 物理阻尼
     
-    // 6层材质的层级属性 (1:最表层 -> 5:最深壁垒)
+    // 5层材质的层级属性 (1:最表层 -> 5:最深壁垒)
     layers: [
         { z: 1.6, restoring: 0.12, tear: 1.30 }, // L1: 现实层 (偏脆硬)
         { z: 1.2, restoring: 0.10, tear: 1.40 }, // L2: 裂缝层
@@ -23,17 +23,21 @@ const CONFIG = {
     bgZ: -5.0
 };
 
-// 交互状态
+// 交互指针状态管理 (支持鼠标/触控以及双手的多点并发拖拽)
 const state = {
     audioEnabled: false,
     audioInitialized: false,
+    gestureEnabled: false,
+    gestureInitialized: false,
     loadingComplete: false,
-    isDragging: false,
-    activeClothIndex: null, // 当前正在拖动的层索引 (0 至 4)
-    draggedParticle: null,
-    mousePos: new THREE.Vector2(),
-    targetDragPos: new THREE.Vector3(),
-    isResetting: false
+    isResetting: false,
+    
+    // 多点指针对象
+    pointers: {
+        mouse: { active: false, ndc: new THREE.Vector2(), draggedParticle: null, targetDragPos: new THREE.Vector3(), activeClothIndex: null },
+        leftHand: { active: false, ndc: new THREE.Vector2(), draggedParticle: null, targetDragPos: new THREE.Vector3(), activeClothIndex: null },
+        rightHand: { active: false, ndc: new THREE.Vector2(), draggedParticle: null, targetDragPos: new THREE.Vector3(), activeClothIndex: null }
+    }
 };
 
 // --- Web Audio API 氛围音效系统 ---
@@ -272,19 +276,16 @@ class Cloth {
 
         for (let j = 0; j <= segmentsH; j++) {
             for (let i = 0; i <= segmentsW; i++) {
-                // 1. 横向与纵向弹簧
                 if (i < segmentsW) {
                     this.constraints.push(new Constraint(this.particles[getIndex(i, j)], this.particles[getIndex(i + 1, j)], this.tearLimit));
                 }
                 if (j < segmentsH) {
                     this.constraints.push(new Constraint(this.particles[getIndex(i, j)], this.particles[getIndex(i, j + 1)], this.tearLimit));
                 }
-                // 2. 对角线斜弹簧
                 if (i < segmentsW && j < segmentsH) {
                     this.constraints.push(new Constraint(this.particles[getIndex(i, j)], this.particles[getIndex(i + 1, j + 1)], this.tearLimit));
                     this.constraints.push(new Constraint(this.particles[getIndex(i + 1, j)], this.particles[getIndex(i, j + 1)], this.tearLimit));
                 }
-                // 3. 弯曲弹簧 (跨过两个节点，使得布料能自展)
                 if (i < segmentsW - 1) {
                     this.constraints.push(new Constraint(this.particles[getIndex(i, j)], this.particles[getIndex(i + 2, j)], this.tearLimit * 1.15));
                 }
@@ -346,6 +347,13 @@ class App {
         this.raycaster = new THREE.Raycaster();
         this.raycaster.params.Mesh = { threshold: 0.1 };
 
+        // MediaPipe 与 Webcam 相关
+        this.videoElement = document.getElementById('webcam');
+        this.webcamCanvas = document.getElementById('webcam-canvas');
+        this.webcamCtx = this.webcamCanvas.getContext('2d');
+        this.mpHands = null;
+        this.mpCamera = null;
+
         // 5 层物理布料
         this.cloths = [];
         // 6 层 Mesh (5个变形网格，1个背景)
@@ -375,7 +383,7 @@ class App {
         this.setupLights();
         this.setupBackgroundParticles();
         this.setupCanvases();
-        this.drawDefaultLayers(); // 渲染默认程序化画面
+        this.drawDefaultLayers();
         this.setupMeshes();
         this.setupEvents();
         this.setupUI();
@@ -426,7 +434,6 @@ class App {
     }
 
     setupCanvases() {
-        // 创建 6 组内容 Canvas 和 5 组 Mask Canvas
         for (let i = 0; i < 6; i++) {
             const canvas = document.createElement('canvas');
             canvas.width = 1024;
@@ -441,14 +448,12 @@ class App {
             this.contentCtxs.push(ctx);
             this.contentTextures.push(tex);
 
-            // 仅前 5 层需要撕裂 Mask
             if (i < 5) {
                 const mCanvas = document.createElement('canvas');
                 mCanvas.width = 1024;
                 mCanvas.height = 1024;
                 const mCtx = mCanvas.getContext('2d');
                 
-                // 填充白色表示未撕裂
                 mCtx.fillStyle = '#ffffff';
                 mCtx.fillRect(0, 0, 1024, 1024);
                 
@@ -463,12 +468,10 @@ class App {
         }
     }
 
-    // --- 核心：程序化绘制 6 个默认图层 ---
     drawDefaultLayers() {
         const w = 1024;
         const h = 1024;
 
-        // 辅助绘制噪点方法
         const applyCanvasNoise = (ctx, opacity) => {
             const imgData = ctx.getImageData(0, 0, w, h);
             const data = imgData.data;
@@ -481,7 +484,7 @@ class App {
             ctx.putImageData(imgData, 0, 0);
         };
 
-        // L1: 现实层 (HAWKINS 海报)
+        // L1: 现实层
         {
             const ctx = this.contentCtxs[0];
             const grad = ctx.createLinearGradient(0, 0, 0, h);
@@ -491,7 +494,6 @@ class App {
             ctx.fillStyle = grad;
             ctx.fillRect(0, 0, w, h);
 
-            // 满天繁星
             ctx.fillStyle = '#ffffff';
             for (let i = 0; i < 150; i++) {
                 const r = Math.random() * 2;
@@ -500,7 +502,6 @@ class App {
                 ctx.fill();
             }
 
-            // 复古霓虹边框
             ctx.strokeStyle = '#e50914';
             ctx.lineWidth = 14;
             ctx.shadowColor = '#e50914';
@@ -509,7 +510,6 @@ class App {
             ctx.lineWidth = 4;
             ctx.strokeRect(80, 80, w - 160, h - 160);
 
-            // 霓虹文字 HAWKINS
             ctx.shadowBlur = 30;
             ctx.fillStyle = '#ffffff';
             ctx.font = 'bold 95px Oswald, sans-serif';
@@ -524,7 +524,7 @@ class App {
             applyCanvasNoise(ctx, 0.05);
         }
 
-        // L2: 裂缝层 (暗红色干枯质感，加少许裂纹)
+        // L2: 裂缝层
         {
             const ctx = this.contentCtxs[1];
             const grad = ctx.createRadialGradient(w/2, h/2, 50, w/2, h/2, w/2);
@@ -533,7 +533,6 @@ class App {
             ctx.fillStyle = grad;
             ctx.fillRect(0, 0, w, h);
 
-            // 绘制裂纹线
             ctx.strokeStyle = '#6b0d12';
             ctx.lineWidth = 6;
             for(let i = 0; i < 6; i++) {
@@ -547,7 +546,7 @@ class App {
             applyCanvasNoise(ctx, 0.07);
         }
 
-        // L3: 血肉层 (复杂的有机纤维和血管)
+        // L3: 血肉层
         {
             const ctx = this.contentCtxs[2];
             const grad = ctx.createLinearGradient(0, 0, w, h);
@@ -557,7 +556,6 @@ class App {
             ctx.fillStyle = grad;
             ctx.fillRect(0, 0, w, h);
 
-            // 绘制无数红色曲线模拟血肉网脉
             ctx.strokeStyle = '#c21c24';
             ctx.lineWidth = 3;
             ctx.shadowColor = '#ff2233';
@@ -576,7 +574,7 @@ class App {
             applyCanvasNoise(ctx, 0.08);
         }
 
-        // L4: 发光层 (岩浆般的高对比橙红裂缝)
+        // L4: 发光层
         {
             const ctx = this.contentCtxs[3];
             const grad = ctx.createRadialGradient(w/2, h/2, 20, w/2, h/2, w/2);
@@ -586,7 +584,6 @@ class App {
             ctx.fillStyle = grad;
             ctx.fillRect(0, 0, w, h);
 
-            // 岩浆裂隙
             ctx.strokeStyle = '#ff6a00';
             ctx.shadowColor = '#ff8c00';
             ctx.shadowBlur = 15;
@@ -601,13 +598,12 @@ class App {
             applyCanvasNoise(ctx, 0.05);
         }
 
-        // L5: 深渊边缘 (扭曲迷雾与异界电网)
+        // L5: 深渊边缘
         {
             const ctx = this.contentCtxs[4];
             ctx.fillStyle = '#06010a';
             ctx.fillRect(0, 0, w, h);
 
-            // 紫红-蓝紫混合迷雾斑块
             for (let i = 0; i < 10; i++) {
                 const rad = 200 + Math.random() * 200;
                 const cx = Math.random() * w;
@@ -623,7 +619,7 @@ class App {
             applyCanvasNoise(ctx, 0.09);
         }
 
-        // L6: 颠倒世界 (深处的冷调蓝黑加夺心魔触手阴影)
+        // L6: 颠倒世界
         {
             const ctx = this.contentCtxs[5];
             const grad = ctx.createRadialGradient(w/2, h/2, 100, w/2, h/2, w/2);
@@ -633,10 +629,9 @@ class App {
             ctx.fillStyle = grad;
             ctx.fillRect(0, 0, w, h);
 
-            // 绘制夺心魔触手阴影
             ctx.fillStyle = 'rgba(2, 4, 10, 0.92)';
             ctx.beginPath();
-            ctx.arc(w / 2, h / 2 - 100, 120, 0, Math.PI * 2); // 核心躯干
+            ctx.arc(w / 2, h / 2 - 100, 120, 0, Math.PI * 2);
             ctx.fill();
 
             ctx.lineWidth = 35;
@@ -645,7 +640,6 @@ class App {
             for (let i = 0; i < 8; i++) {
                 ctx.beginPath();
                 ctx.moveTo(w / 2, h / 2 - 100);
-                // 弯曲的触手
                 ctx.bezierCurveTo(
                     w/2 + (i - 3.5) * 150, h/2 + 100,
                     w/2 + (i - 3.5) * 200 + (Math.random() - 0.5) * 200, h/2 + 400,
@@ -656,7 +650,6 @@ class App {
             applyCanvasNoise(ctx, 0.06);
         }
 
-        // 提交所有纹理更新
         for (let i = 0; i < 6; i++) {
             this.contentTextures[i].needsUpdate = true;
         }
@@ -700,7 +693,6 @@ class App {
         const segW = CONFIG.gridWidth;
         const segH = CONFIG.gridHeight;
 
-        // 噪声 Shader 代码，用于撕裂边缘的不规则毛糙及发光带渲染
         const noiseShaderSnippet = `
             float rand(vec2 co){
                 return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
@@ -717,23 +709,19 @@ class App {
             }
         `;
 
-        // 循环创建 5 层物理布料和 Mesh
         for (let i = 0; i < 5; i++) {
             const layerCfg = CONFIG.layers[i];
             
-            // 实例布料
             const cloth = new Cloth(CONFIG.clothWidth, CONFIG.clothHeight, segW, segH, layerCfg.tear, layerCfg.restoring);
             this.cloths.push(cloth);
 
-            // Plane几何体
             const geom = new THREE.PlaneGeometry(CONFIG.clothWidth, CONFIG.clothHeight, segW, segH);
             
-            // Shader 材质：动态控制红光自发光和毛边撕开
             const mat = new THREE.ShaderMaterial({
                 uniforms: {
                     mainTex: { value: this.contentTextures[i] },
                     maskTex: { value: this.maskTextures[i] },
-                    glowIntensity: { value: i === 0 ? 0.0 : 1.8 } // 表层无发光，深层带发光
+                    glowIntensity: { value: i === 0 ? 0.0 : 1.8 }
                 },
                 vertexShader: `
                     varying vec2 vUv;
@@ -756,8 +744,6 @@ class App {
 
                     void main() {
                         float maskVal = texture2D(maskTex, vUv).r;
-                        
-                        // 引入高频噪声扰动边界
                         float n = noise(vUv * (140.0 + glowIntensity * 10.0)) * 0.16;
                         float border = maskVal + n;
                         
@@ -767,7 +753,6 @@ class App {
 
                         vec4 baseColor = texture2D(mainTex, vUv);
                         
-                        // 边缘渐暗或发光处理
                         vec3 normal = normalize(vNormal);
                         vec3 lightDir = normalize(vec3(0.4, 0.4, 1.0));
                         float ndl = max(0.28, dot(normal, lightDir));
@@ -775,12 +760,10 @@ class App {
                         vec3 finalColor = baseColor.rgb * ndl;
 
                         if (glowIntensity > 0.0) {
-                            // 边缘溢出耀眼的红光
                             float glowFactor = 1.0 - smoothstep(0.48, 0.62, border);
                             vec3 glowColor = vec3(1.0, 0.10, 0.02) * glowFactor * glowIntensity;
                             finalColor += glowColor;
                         } else {
-                            // 第一层纸张边缘微焦变黑
                             float edgeDarken = smoothstep(0.48, 0.54, border);
                             finalColor = mix(finalColor * 0.2, finalColor, edgeDarken);
                         }
@@ -797,7 +780,6 @@ class App {
             this.meshes.push(mesh);
         }
 
-        // L6: 背景层 Mesh (直接填充第六组程序化贴图)
         const bgGeom = new THREE.PlaneGeometry(CONFIG.clothWidth * 1.35, CONFIG.clothHeight * 1.35);
         const bgMat = new THREE.MeshBasicMaterial({
             map: this.contentTextures[5],
@@ -806,24 +788,27 @@ class App {
         const bgMesh = new THREE.Mesh(bgGeom, bgMat);
         bgMesh.position.z = CONFIG.bgZ;
         this.scene.add(bgMesh);
-        this.meshes.push(bgMesh); // 塞到 mesh 队列的最底端
+        this.meshes.push(bgMesh);
     }
 
     setupEvents() {
+        // --- 鼠标/触屏事件（归入 mouse 虚拟操作指针） ---
         const onPointerDown = (e) => {
             if (!state.loadingComplete || state.isResetting) return;
-            state.isDragging = true;
             
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
             const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            this.updateMouseCoords(clientX, clientY);
+            
+            const pointer = state.pointers.mouse;
+            pointer.active = true;
+            this.updatePointerNdc(pointer, clientX, clientY);
 
             if (state.audioEnabled && !state.audioInitialized) {
                 sounds.init();
                 sounds.setVolume(0.45);
             }
 
-            this.attemptGrab();
+            this.attemptGrabForPointer(pointer);
         };
 
         const onPointerMove = (e) => {
@@ -833,20 +818,16 @@ class App {
             this.targetRotation.x = (clientX / window.innerWidth - 0.5) * 0.05;
             this.targetRotation.y = (clientY / window.innerHeight - 0.5) * 0.05;
 
-            if (!state.isDragging || !state.draggedParticle) return;
+            const pointer = state.pointers.mouse;
+            if (!pointer.active || !pointer.draggedParticle) return;
             
-            this.updateMouseCoords(clientX, clientY);
-            this.updateDragPosition();
+            this.updatePointerNdc(pointer, clientX, clientY);
+            this.updateDragPositionForPointer(pointer);
         };
 
         const onPointerUp = () => {
-            if (state.draggedParticle) {
-                state.draggedParticle.pinned = false;
-                state.draggedParticle = null;
-            }
-            state.isDragging = false;
-            state.activeClothIndex = null;
-            sounds.stopTension();
+            const pointer = state.pointers.mouse;
+            this.releasePointer(pointer);
         };
 
         window.addEventListener('mousedown', onPointerDown);
@@ -858,45 +839,31 @@ class App {
         window.addEventListener('touchend', onPointerUp);
     }
 
-    updateMouseCoords(x, y) {
-        state.mousePos.x = (x / window.innerWidth) * 2 - 1;
-        state.mousePos.y = -(y / window.innerHeight) * 2 + 1;
+    updatePointerNdc(pointer, screenX, screenY) {
+        pointer.ndc.x = (screenX / window.innerWidth) * 2 - 1;
+        pointer.ndc.y = -(screenY / window.innerHeight) * 2 + 1;
     }
 
-    attemptGrab() {
-        this.raycaster.setFromCamera(state.mousePos, this.camera);
+    // --- 通用：锁定并抓取指针对应的最近质点 ---
+    attemptGrabForPointer(pointer) {
+        this.raycaster.setFromCamera(pointer.ndc, this.camera);
 
-        // 依次穿透检测 L1 至 L5
         for (let i = 0; i < 5; i++) {
             const intersects = this.raycaster.intersectObject(this.meshes[i]);
             if (intersects.length > 0) {
                 const hit = intersects[0];
                 const uv = hit.uv;
                 
-                // 检查第 i 层的 Mask 值。如果未撕开，则锁定抓取这一层
                 if (this.checkMaskValue(i, uv) > 10) {
-                    state.activeClothIndex = i;
-                    this.grabNearestParticle(this.cloths[i], hit.point);
-                    return; // 锁定抓取，中止穿透
+                    pointer.activeClothIndex = i;
+                    this.grabNearestParticleForPointer(pointer, this.cloths[i], hit.point);
+                    return;
                 }
             }
         }
     }
 
-    checkMaskValue(index, uv) {
-        const ctx = this.maskCtxs[index];
-        const x = Math.floor(uv.x * 1024);
-        const y = Math.floor((1.0 - uv.y) * 1024);
-        
-        try {
-            const pixel = ctx.getImageData(x, y, 1, 1).data;
-            return pixel[0];
-        } catch(e) {
-            return 255;
-        }
-    }
-
-    grabNearestParticle(cloth, hitPoint) {
+    grabNearestParticleForPointer(pointer, cloth, hitPoint) {
         let nearest = null;
         let minDist = Infinity;
 
@@ -919,37 +886,60 @@ class App {
         }
 
         if (nearest) {
-            state.draggedParticle = nearest;
+            pointer.draggedParticle = nearest;
             nearest.pinned = true;
             nearest.pinPosition.copy(hitPoint);
-            state.targetDragPos.copy(hitPoint);
+            pointer.targetDragPos.copy(hitPoint);
         }
     }
 
-    updateDragPosition() {
-        if (!state.draggedParticle || state.activeClothIndex === null) return;
+    // --- 通用：更新指针对应的拖拽位置（带Z轴起伏） ---
+    updateDragPositionForPointer(pointer) {
+        if (!pointer.draggedParticle || pointer.activeClothIndex === null) return;
 
-        const currentCfg = CONFIG.layers[state.activeClothIndex];
+        const currentCfg = CONFIG.layers[pointer.activeClothIndex];
         const planeZ = currentCfg.z;
         const targetPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), -planeZ);
         
-        this.raycaster.setFromCamera(state.mousePos, this.camera);
+        this.raycaster.setFromCamera(pointer.ndc, this.camera);
         const dragPoint = new THREE.Vector3();
         this.raycaster.ray.intersectPlane(targetPlane, dragPoint);
 
-        const center = state.draggedParticle.original;
+        const center = pointer.draggedParticle.original;
         const dragDist = dragPoint.distanceTo(center);
         
-        // 拽扯越远，Z 轴起伏越大（但必须受控，不能穿模到前一层）
-        const maxOffsetZ = state.activeClothIndex === 0 ? 1.5 : 0.8;
+        const maxOffsetZ = pointer.activeClothIndex === 0 ? 1.5 : 0.8;
         dragPoint.z = Math.min(maxOffsetZ, dragDist * 0.12);
 
-        state.targetDragPos.lerp(dragPoint, 0.22);
-        state.draggedParticle.pinPosition.copy(state.targetDragPos);
+        pointer.targetDragPos.lerp(dragPoint, 0.22);
+        pointer.draggedParticle.pinPosition.copy(pointer.targetDragPos);
 
         if (state.audioEnabled && state.audioInitialized) {
-            const stretch = state.draggedParticle.position.distanceTo(state.draggedParticle.original);
-            sounds.updateTension(dragPoint.distanceTo(state.draggedParticle.position), stretch);
+            const stretch = pointer.draggedParticle.position.distanceTo(pointer.draggedParticle.original);
+            sounds.updateTension(dragPoint.distanceTo(pointer.draggedParticle.position), stretch);
+        }
+    }
+
+    releasePointer(pointer) {
+        if (pointer.draggedParticle) {
+            pointer.draggedParticle.pinned = false;
+            pointer.draggedParticle = null;
+        }
+        pointer.active = false;
+        pointer.activeClothIndex = null;
+        sounds.stopTension();
+    }
+
+    checkMaskValue(index, uv) {
+        const ctx = this.maskCtxs[index];
+        const x = Math.floor(uv.x * 1024);
+        const y = Math.floor((1.0 - uv.y) * 1024);
+        
+        try {
+            const pixel = ctx.getImageData(x, y, 1, 1).data;
+            return pixel[0];
+        } catch(e) {
+            return 255;
         }
     }
 
@@ -966,15 +956,13 @@ class App {
         ctx.globalCompositeOperation = 'destination-out';
         
         const dist = Math.hypot(u2 - u1, v2 - v1);
-        // 适当调整步数，保证不规则毛糙绘制完全
         const steps = Math.max(10, Math.floor(dist / 4));
 
         for (let i = 0; i <= steps; i++) {
             const t = i / steps;
-            // 笔刷随机偏置，强化粗糙感
             const cx = u1 + (u2 - u1) * t + (Math.random() - 0.5) * 14;
             const cy = v1 + (v2 - v1) * t + (Math.random() - 0.5) * 14;
-            const r = 12 + Math.random() * 26; // 笔刷圆角大小
+            const r = 12 + Math.random() * 26;
 
             ctx.beginPath();
             ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -987,6 +975,7 @@ class App {
 
     setupUI() {
         const btnAudio = document.getElementById('btn-audio');
+        const btnGesture = document.getElementById('btn-gesture');
         const btnUpload = document.getElementById('btn-upload');
         const inputUpload = document.getElementById('input-upload');
         const btnReset = document.getElementById('btn-reset');
@@ -1003,12 +992,15 @@ class App {
             }
         });
 
-        // 上传按钮触发隐藏的 input
+        // 摄像头手势交互开启/关闭
+        btnGesture.addEventListener('click', () => {
+            this.toggleGesture();
+        });
+
         btnUpload.addEventListener('click', () => {
             inputUpload.click();
         });
 
-        // 监听文件上传
         inputUpload.addEventListener('change', (e) => {
             this.handleImageUpload(e.target.files);
         });
@@ -1018,16 +1010,230 @@ class App {
         });
     }
 
-    // --- 核心：多图层自定义上传与居中 cover 裁剪逻辑 ---
+    // --- 摄像头与 MediaPipe Hands 初始化与控制 ---
+    toggleGesture() {
+        const btnGesture = document.getElementById('btn-gesture');
+        const container = document.getElementById('webcam-container');
+
+        state.gestureEnabled = !state.gestureEnabled;
+
+        if (state.gestureEnabled) {
+            btnGesture.innerHTML = '<span class="icon">🖐️</span> 手势: 开';
+            btnGesture.classList.add('active');
+            container.style.display = 'flex';
+
+            if (!state.gestureInitialized) {
+                this.initMediaPipe();
+            } else {
+                if (this.videoElement.srcObject) {
+                    this.videoElement.play();
+                }
+            }
+        } else {
+            btnGesture.innerHTML = '<span class="icon">🖐️</span> 手势: 关';
+            btnGesture.classList.remove('active');
+            container.style.display = 'none';
+            
+            // 暂停摄像头读取，释放指针
+            this.videoElement.pause();
+            this.releasePointer(state.pointers.leftHand);
+            this.releasePointer(state.pointers.rightHand);
+        }
+    }
+
+    initMediaPipe() {
+        if (typeof Hands === 'undefined') {
+            console.error('MediaPipe Hands 库尚未载入！');
+            return;
+        }
+
+        // 实例 Hands 核心识别器
+        this.mpHands = new Hands({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
+
+        this.mpHands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.60,
+            minTrackingConfidence: 0.60
+        });
+
+        this.mpHands.onResults((results) => this.onHandResults(results));
+
+        // 开启摄像头数据回路
+        this.mpCamera = new Camera(this.videoElement, {
+            onFrame: async () => {
+                if (state.gestureEnabled) {
+                    await this.mpHands.send({ image: this.videoElement });
+                }
+            },
+            width: 160,
+            height: 120
+        });
+
+        this.mpCamera.start().then(() => {
+            state.gestureInitialized = true;
+        }).catch((err) => {
+            console.error('摄像头开启失败或权限被拒:', err);
+            // 降级回退处理
+            state.gestureEnabled = false;
+            const btnGesture = document.getElementById('btn-gesture');
+            btnGesture.innerHTML = '<span class="icon">🖐️</span> 手势: 错';
+            btnGesture.classList.remove('active');
+            document.getElementById('webcam-container').style.display = 'none';
+        });
+    }
+
+    // --- 摄像头检测回调：分析双手并触发物理捏合拉扯 ---
+    onHandResults(results) {
+        const ctx = this.webcamCtx;
+        const cw = this.webcamCanvas.width;
+        const ch = this.webcamCanvas.height;
+
+        // 1. 镜像清除并绘制当前摄像头画面以提供预览
+        ctx.save();
+        ctx.translate(cw, 0);
+        ctx.scale(-1, 1); // 镜像反转
+        ctx.clearRect(0, 0, cw, ch);
+        ctx.drawImage(results.image, 0, 0, cw, ch);
+        ctx.restore();
+
+        // 2. 重置手势指针活跃状态，如果在 results 里未识别，则释放对应指针
+        let detectedPointers = { leftHand: false, rightHand: false };
+
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+            for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                const landmarks = results.multiHandLandmarks[i];
+                
+                // 大拇指尖 (4号) 和食指尖 (8号)
+                const thumb = landmarks[4];
+                const indexFinger = landmarks[8];
+
+                // 计算 3D 捏合距离 (Pinch Distance)
+                const dist = Math.hypot(
+                    thumb.x - indexFinger.x,
+                    thumb.y - indexFinger.y,
+                    (thumb.z - indexFinger.z) * 0.4 // 适当微弱化 Z 轴的深度差影响
+                );
+
+                const isPinched = dist < 0.052; // 捏合激活阈值
+
+                // 根据手心横坐标确定是“左指针”还是“右指针” (以中点在画面左/右侧区分最稳健)
+                const pinchX = (thumb.x + indexFinger.x) / 2;
+                const pinchY = (thumb.y + indexFinger.y) / 2;
+                
+                // 由于摄像头被镜像了，我们将手部的 X 坐标进行对称映射
+                const mappedX = 1.0 - pinchX; 
+                const mappedY = pinchY;
+
+                // 区分左/右手虚拟指针
+                const pointerKey = pinchX > 0.5 ? 'leftHand' : 'rightHand'; // 摄像头画面左侧为物理右侧手
+                const pointer = state.pointers[pointerKey];
+                detectedPointers[pointerKey] = true;
+
+                // 将坐标转化为 NDC 坐标传入射线检测
+                pointer.ndc.x = mappedX * 2 - 1;
+                pointer.ndc.y = -mappedY * 2 + 1;
+
+                if (isPinched) {
+                    if (!pointer.active) {
+                        pointer.active = true;
+                        this.attemptGrabForPointer(pointer);
+                    } else {
+                        this.updateDragPositionForPointer(pointer);
+                    }
+                } else {
+                    if (pointer.active) {
+                        this.releasePointer(pointer);
+                    }
+                }
+
+                // 3. 在小窗口 Canvas 上绘制手部骨骼连线 (做镜像位置转换)
+                this.drawWebcamHandSkeleton(ctx, landmarks, cw, ch, isPinched);
+            }
+        }
+
+        // 4. 清理失联（飞出镜头）的手势指针
+        if (!detectedPointers.leftHand && state.pointers.leftHand.active) {
+            this.releasePointer(state.pointers.leftHand);
+        }
+        if (!detectedPointers.rightHand && state.pointers.rightHand.active) {
+            this.releasePointer(state.pointers.rightHand);
+        }
+    }
+
+    drawWebcamHandSkeleton(ctx, landmarks, cw, ch, isPinched) {
+        ctx.save();
+        // 关键点渲染需要镜像翻转 (因为视频本身也是镜像翻转在 canvas 上的)
+        const getCanvasCoords = (lm) => {
+            return {
+                x: (1.0 - lm.x) * cw,
+                y: lm.y * ch
+            };
+        };
+
+        // 绘制骨节连线
+        ctx.strokeStyle = isPinched ? '#ffd700' : '#ff3333'; // 捏合时金黄色，平时红色
+        ctx.lineWidth = 1.5;
+
+        // 五根手指骨骼回路连接
+        const fingerPaths = [
+            [0, 1, 2, 3, 4],       // 大拇指
+            [0, 5, 6, 7, 8],       // 食指
+            [0, 9, 10, 11, 12],    // 中指
+            [0, 13, 14, 15, 16],   // 无名指
+            [0, 17, 18, 19, 20],   // 小拇指
+            [5, 9, 13, 17]         // 手掌横连
+        ];
+
+        fingerPaths.forEach(path => {
+            ctx.beginPath();
+            const start = getCanvasCoords(landmarks[path[0]]);
+            ctx.moveTo(start.x, start.y);
+            for (let i = 1; i < path.length; i++) {
+                const pt = getCanvasCoords(landmarks[path[i]]);
+                ctx.lineTo(pt.x, pt.y);
+            }
+            ctx.stroke();
+        });
+
+        // 绘制 21 个物理质点 (绿色小圆圈)
+        ctx.fillStyle = '#00ff33';
+        for (let i = 0; i < 21; i++) {
+            const pt = getCanvasCoords(landmarks[i]);
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // 高亮捏合大拇指和食指连线
+        if (isPinched) {
+            const pThumb = getCanvasCoords(landmarks[4]);
+            const pIndex = getCanvasCoords(landmarks[8]);
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(pThumb.x, pThumb.y);
+            ctx.lineTo(pIndex.x, pIndex.y);
+            ctx.stroke();
+            
+            // 在中点上画个高亮金黄色实心圈
+            ctx.fillStyle = '#ffd700';
+            ctx.beginPath();
+            ctx.arc((pThumb.x + pIndex.x)/2, (pThumb.y + pIndex.y)/2, 5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
     handleImageUpload(files) {
         if (!files || files.length === 0) return;
 
-        // 最多取 6 张图
         const count = Math.min(files.length, 6);
         const imgElements = [];
         let loadedCount = 0;
 
-        // 显示加载提示
         const overlay = document.getElementById('loading-overlay');
         const percentText = document.getElementById('loading-percent');
         const progressBar = document.getElementById('loading-bar');
@@ -1037,7 +1243,6 @@ class App {
         progressBar.style.width = '0%';
 
         const triggerLoadDone = () => {
-            // 6层图片加载完毕，开始绘制 Canvas 并重置系统
             this.rebuildLayersFromImages(imgElements);
             this.resetScene();
             
@@ -1061,7 +1266,6 @@ class App {
                 percentText.innerText = `${pct}%`;
 
                 if (loadedCount === count) {
-                    // 当选择的图片少于 6 张时，使用最后一张重复填充剩下至 6 张
                     const lastImg = imgElements[imgElements.length - 1];
                     while (imgElements.length < 6) {
                         imgElements.push(lastImg);
@@ -1079,7 +1283,6 @@ class App {
         }
     }
 
-    // 将上传完毕的 Image 数组 cover 裁剪绘制到 6 层离屏 Canvas
     rebuildLayersFromImages(images) {
         const cw = 1024;
         const ch = 1024;
@@ -1094,23 +1297,19 @@ class App {
                 const iw = img.naturalWidth;
                 const ih = img.naturalHeight;
                 
-                // 计算 cover 缩放因子
                 const scale = Math.max(cw / iw, ch / ih);
                 const w = iw * scale;
                 const h = ih * scale;
                 
-                // 居中裁剪绘制
                 const dx = (cw - w) / 2;
                 const dy = (ch - h) / 2;
 
                 ctx.drawImage(img, dx, dy, w, h);
             } else {
-                // 如果图片出错，使用之前的默认画面渲染
                 ctx.fillStyle = '#080104';
                 ctx.fillRect(0, 0, cw, ch);
             }
 
-            // 标记纹理更新
             this.contentTextures[i].needsUpdate = true;
         }
     }
@@ -1127,16 +1326,19 @@ class App {
                 clearInterval(flashInterval);
                 this.scene.background = new THREE.Color(0x040102);
                 
-                // 重置所有 5 层物理
                 for (let i = 0; i < 5; i++) {
                     this.cloths[i].reset();
                     
-                    // 重置 Mask
                     const mCtx = this.maskCtxs[i];
                     mCtx.fillStyle = '#ffffff';
                     mCtx.fillRect(0, 0, 1024, 1024);
                     this.maskTextures[i].needsUpdate = true;
                 }
+
+                // 释放所有手势及鼠标指针
+                this.releasePointer(state.pointers.mouse);
+                this.releasePointer(state.pointers.leftHand);
+                this.releasePointer(state.pointers.rightHand);
 
                 state.isResetting = false;
             }
@@ -1155,7 +1357,6 @@ class App {
         const dt = Math.min(this.clock.getDelta(), 0.02);
 
         if (!state.isResetting) {
-            // 1. 物理步进与撕裂判断
             for (let index = 0; index < 5; index++) {
                 const cloth = this.cloths[index];
                 const rip = cloth.update(dt);
@@ -1175,19 +1376,15 @@ class App {
                     }
                 }
 
-                // 同步顶点到 Mesh
                 this.syncGeometry(this.meshes[index].geometry, cloth);
             }
         }
 
-        // 2. 背景粒子运动
         this.animateBackgroundParticles();
 
-        // 3. 相机视差
         this.camera.rotation.y += (this.targetRotation.x - this.camera.rotation.y) * 0.05;
         this.camera.rotation.x += (this.targetRotation.y - this.camera.rotation.x) * 0.05;
 
-        // 4. 闪电
         if (Math.random() < 0.003) {
             this.triggerLightning();
         }
